@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RAG Doc Chat · Document Q&A demo</title>
+<style>
+  :root {
+    --bg: #0b1020; --panel: #131a2e; --panel2: #18203a; --line: #263152;
+    --fg: #e8ecf8; --muted: #8b96b5; --accent: #5b8cff; --ok: #34d399; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--line);
+           display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px;
+           background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
+  .badge.demo { color: var(--warn); }
+  .badge.live { color: var(--ok); }
+  #langBtn { font-size: 12px; padding: 4px 10px; }
+  .layout { display: grid; grid-template-columns: 300px 1fr; gap: 16px; padding: 16px 20px; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 14px; }
+  h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted);
+       text-transform: uppercase; letter-spacing: .06em; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+           padding: 8px 12px; cursor: pointer; font-size: 13px; }
+  button.ghost { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); }
+  input[type=file] { display: none; }
+  .doc { display: flex; justify-content: space-between; align-items: center;
+         padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .doc:last-child { border-bottom: 0; }
+  .doc small { color: var(--muted); }
+  .drop { border: 1px dashed var(--line); border-radius: 8px; padding: 18px;
+          text-align: center; color: var(--muted); }
+  .drop.hot { border-color: var(--accent); color: var(--fg); }
+  #chat { min-height: 320px; }
+  .msg { margin-bottom: 14px; }
+  .msg .who { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .msg .body { background: var(--panel2); border-radius: 8px; padding: 10px 12px;
+               white-space: pre-wrap; word-break: break-word; }
+  .msg.refused .body { border-left: 3px solid var(--warn); }
+  .cites { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .cite { font-size: 12px; background: var(--panel2); border: 1px solid var(--line);
+          border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--muted); }
+  .cite:hover { color: var(--fg); border-color: var(--accent); }
+  .composer { display: flex; gap: 8px; margin-top: 12px; }
+  .composer input { flex: 1; background: var(--panel2); border: 1px solid var(--line);
+          color: var(--fg); border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat { background: var(--panel2); border-radius: 8px; padding: 10px; }
+  .stat b { display: block; font-size: 16px; }
+  .stat span { font-size: 11px; color: var(--muted); }
+  .hint { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>RAG Doc Chat</h1>
+  <button id="langBtn" class="ghost">EN / 中文</button>
+  <span class="badge" id="mode">Loading…</span>
+  <span class="hint" data-i18n="tagline">Upload documents → hybrid retrieval (vector + BM25 + RRF) → grounded answers with citations</span>
+</header>
+
+<div class="layout">
+  <div>
+    <div class="panel" style="margin-bottom:14px">
+      <h2 data-i18n="docs">Document library</h2>
+      <div class="drop" id="drop"><span data-i18n="drop">Click or drag files here</span><br /><small data-i18n="drop_supported">Supports PDF / TXT / MD / HTML</small></div>
+      <input type="file" id="file" multiple />
+      <div id="docs" style="margin-top:12px"></div>
+    </div>
+    <div class="panel">
+      <h2 data-i18n="metrics">Runtime metrics</h2>
+      <div class="stats" id="stats"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 data-i18n="qa">Q&A</h2>
+    <div id="chat"></div>
+    <div class="composer">
+      <input id="q" data-i18n-attr="placeholder:placeholder" placeholder="Ask about something in the documents, e.g., What is the refund policy?" />
+      <button data-i18n="send" onclick="ask()">Send</button>
+    </div>
+    <div class="hint" style="margin-top:8px" data-i18n="hint">Enter to send · click a citation to view the source snippet</div>
+  </div>
+</div>
+
+<script>
+/* ---- i18n: English default, Chinese toggle. State in localStorage. ---- */
+const I18N = {
+  en: {
+    title: "RAG Doc Chat · Document Q&A demo",
+    tagline: "Upload documents → hybrid retrieval (vector + BM25 + RRF) → grounded answers with citations",
+    loading: "Loading…",
+    docs: "Document library",
+    drop: "Click or drag files here",
+    drop_supported: "Supports PDF / TXT / MD / HTML",
+    metrics: "Runtime metrics",
+    qa: "Q&A",
+    placeholder: "Ask about something in the documents, e.g., What is the refund policy?",
+    send: "Send",
+    hint: "Enter to send · click a citation to view the source snippet",
+    stat_docs: "Documents",
+    stat_chunks: "Chunks",
+    stat_qa: "Q&A",
+    stat_cost: "Total cost",
+    no_docs: "No documents yet",
+    delete: "Delete",
+    doc_meta: "%s chunks · %s chars · %s",
+    cite_chip: "%s · p.%s · rrf %s",
+    cite_alert: "%s (page %s)\n\n%s",
+    sys: "System",
+    you: "You",
+    assistant: "Assistant",
+    searching: "Searching…",
+    assistant_meta: "Assistant · %s · confidence %s · cost $%s",
+    demo_badge: "DEMO mode · %s",
+    live_badge: "Model · %s",
+    uploaded: "Ingested: %s (%s pages / %s chunks, %s chunks cache-hit)",
+    error: "Error: ",
+    upload_failed: "Upload failed: "
+  },
+  zh: {
+    title: "RAG Doc Chat · 文档问答演示",
+    tagline: "上传文档 → 混合检索（向量 + BM25 + RRF）→ 带引用的 grounded 回答",
+    loading: "加载中…",
+    docs: "文档库",
+    drop: "点击或拖拽文件到此",
+    drop_supported: "支持 PDF / TXT / MD / HTML",
+    metrics: "运行指标",
+    qa: "问答",
+    placeholder: "问点文档里的内容，例如：退款政策是什么？",
+    send: "发送",
+    hint: "Enter 发送 · 引用块点击可查看原文片段",
+    stat_docs: "文档",
+    stat_chunks: "分块",
+    stat_qa: "问答",
+    stat_cost: "累计成本",
+    no_docs: "还没有文档",
+    delete: "删除",
+    doc_meta: "%s 块 · %s 字 · %s",
+    cite_chip: "%s · 第 %s 页 · rrf %s",
+    cite_alert: "%s（第 %s 页）\n\n%s",
+    sys: "系统",
+    you: "你",
+    assistant: "助手",
+    searching: "检索中…",
+    assistant_meta: "助手 · %s · 置信度 %s · 成本 $%s",
+    demo_badge: "DEMO 模式 · %s",
+    live_badge: "模型 · %s",
+    uploaded: "已入库：%s（%s 页 / %s 块，缓存命中 %s 块）",
+    error: "出错：",
+    upload_failed: "上传失败："
+  }
+};
+
+let lang = "en";
+try {
+  const saved = localStorage.getItem("rag-doc-chat-lang");
+  if (saved === "en" || saved === "zh") lang = saved;
+} catch (e) { /* localStorage unavailable: keep default */ }
+
+function t(key) {
+  const s = I18N[lang][key];
+  return s !== undefined ? s : (I18N.en[key] !== undefined ? I18N.en[key] : key);
+}
+function tf(key, ...args) {
+  let s = t(key);
+  for (const v of args) s = s.split("%s").join(String(v));
+  return s;
+}
+
+const chatEl = document.getElementById("chat");
+const fileEl = document.getElementById("file");
+const dropEl = document.getElementById("drop");
+const docsEl = document.getElementById("docs");
+
+function esc(s) { return s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+/* Chat history keeps label/meta bodies as thunks so a language switch re-renders them. */
+const history = [];
+
+function makeCites(parent, cites) {
+  const c = document.createElement("div");
+  c.className = "cites";
+  cites.forEach(x => {
+    const b = document.createElement("span");
+    b.className = "cite";
+    b.textContent = tf("cite_chip", x.title, x.page, x.rrf);
+    b.title = x.snippet;
+    b.onclick = () => alert(tf("cite_alert", x.title, x.page, x.snippet));
+    c.appendChild(b);
+  });
+  parent.appendChild(c);
+}
+
+function renderChat() {
+  chatEl.innerHTML = "";
+  history.forEach(m => {
+    const d = document.createElement("div");
+    d.className = "msg" + (m.cls ? " " + m.cls : "");
+    const who = m.who() + (m.meta ? " · " + m.meta() : "");
+    d.innerHTML = `<div class="who">${esc(who)}</div><div class="body">${esc(m.body())}</div>`;
+    if (m.cites && m.cites.length) makeCites(d, m.cites);
+    chatEl.appendChild(d);
+  });
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+function addMsg(whoFn, bodyFn, cls, cites) {
+  history.push({ who: whoFn, meta: null, body: bodyFn, cls: cls || "", cites: cites || [] });
+  renderChat();
+}
+
+async function loadStats() {
+  const r = await fetch("/api/stats").then(r => r.json());
+  document.getElementById("stats").innerHTML = `
+    <div class="stat"><b>${r.documents}</b><span>${t("stat_docs")}</span></div>
+    <div class="stat"><b>${r.chunks}</b><span>${t("stat_chunks")}</span></div>
+    <div class="stat"><b>${r.messages}</b><span>${t("stat_qa")}</span></div>
+    <div class="stat"><b>$${r.total_cost_usd.toFixed(4)}</b><span>${t("stat_cost")}</span></div>`;
+  const b = document.getElementById("mode");
+  b.textContent = r.demo_mode ? tf("demo_badge", r.model) : tf("live_badge", r.model);
+  b.className = "badge " + (r.demo_mode ? "demo" : "live");
+}
+
+async function loadDocs() {
+  const r = await fetch("/api/documents").then(r => r.json());
+  docsEl.innerHTML = r.documents.length ? "" : `<div class="hint">${t("no_docs")}</div>`;
+  r.documents.forEach(d => {
+    const row = document.createElement("div");
+    row.className = "doc";
+    row.innerHTML = `<div>${esc(d.title)}<br /><small>${tf("doc_meta", d.chunks, d.chars, d.source)}</small></div>`;
+    const x = document.createElement("button");
+    x.className = "ghost";
+    x.textContent = t("delete");
+    x.onclick = async () => {
+      await fetch("/api/documents/" + d.id, { method: "DELETE" });
+      loadDocs(); loadStats();
+    };
+    row.appendChild(x);
+    docsEl.appendChild(row);
+  });
+}
+
+dropEl.onclick = () => fileEl.click();
+dropEl.ondragover = e => { e.preventDefault(); dropEl.classList.add("hot"); };
+dropEl.ondragleave = () => dropEl.classList.remove("hot");
+dropEl.ondrop = e => { e.preventDefault(); dropEl.classList.remove("hot"); upload(e.dataTransfer.files); };
+fileEl.onchange = () => upload(fileEl.files);
+
+async function upload(files) {
+  for (const f of files) {
+    const fd = new FormData();
+    fd.append("file", f);
+    const r = await fetch("/api/documents", { method: "POST", body: fd });
+    const j = await r.json();
+    if (!r.ok) { alert(t("upload_failed") + (j.detail || r.status)); return; }
+    addMsg(() => t("sys"), () => tf("uploaded", j.title, j.pages, j.chunks, j.cached));
+  }
+  loadDocs(); loadStats();
+}
+
+async function ask() {
+  const q = document.getElementById("q").value.trim();
+  if (!q) return;
+  document.getElementById("q").value = "";
+  addMsg(() => t("you"), () => q);
+  const rec = { cls: "", who: () => t("assistant"), meta: null, body: () => t("searching"), cites: [] };
+  history.push(rec);
+  renderChat();
+  try {
+    const r = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q })
+    }).then(r => r.json());
+    rec.body = () => r.answer;
+    if (r.refused) rec.cls = "refused";
+    rec.meta = () => tf("assistant_meta", r.mode, r.confidence, r.cost.toFixed(5));
+    rec.cites = r.citations || [];
+    renderChat();
+    loadStats();
+  } catch (e) {
+    rec.body = () => t("error") + e;
+    renderChat();
+  }
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-attr]").forEach(el => {
+    const parts = el.dataset.i18nAttr.split(":");
+    el.setAttribute(parts[0], t(parts[1]));
+  });
+  renderChat();
+  loadStats();
+  loadDocs();
+}
+
+document.getElementById("langBtn").onclick = () => {
+  lang = lang === "en" ? "zh" : "en";
+  try { localStorage.setItem("rag-doc-chat-lang", lang); } catch (e) { /* ignore */ }
+  applyLang();
+};
+
+document.getElementById("q").onkeydown = e => { if (e.key === "Enter") ask(); };
+applyLang();
+</script>
+</body>
+</html>
